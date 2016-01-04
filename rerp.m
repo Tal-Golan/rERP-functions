@@ -50,6 +50,8 @@ X = sparse(i,j,1,data_len,window_length*num_event_types);
 % add a constant predictor
 X = cat(2,X,sparse(ones(data_len,1)));
 
+%TODO - add artifact rejection here
+
 % ordinary least squares: solve observedTimecourse=X*b;
 b=X\input_data;
 
