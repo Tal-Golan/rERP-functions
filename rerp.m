@@ -38,6 +38,15 @@ tictoc = tic;
 
 % Handle input 
 nargin = length(varargin);
+
+% If additional predictors exist assign them to variable
+if nargin>1 && length(input_data)==length(varargin{nargin})
+    extra_predictors=varargin{nargin};
+    nargin=nargin-1; % ignore last input in counting input variables
+else 
+    extra_predictors=[];
+end
+
 if nargin < 1
     error('Not enough input arguments');
     
@@ -120,6 +129,17 @@ else
     X = sparse(i,j,1,data_len,sum(window_length));
     % Add a constant predictor
     X = cat(2,X,sparse(ones(data_len,1)));
+    % Add extra predictors
+    if length(extra_predictors)==size(extra_predictors,1)
+        X=cat(2,X,sparse(extra_predictors));
+        num_extra_predictors=size(extra_predictors,2);
+    elseif length(extra_predictors)==size(extra_predictors,2)
+        X=cat(2,X,sparse(extra_predictors'));
+        num_extra_predictors=size(extra_predictors,1);
+    else
+        warning('Wrong dimensions of additional predictors matrix');
+    end
+    
     % Assign design matrix struct
     design_matrix = struct;
     design_matrix.matrix = X;
@@ -128,6 +148,7 @@ else
     design_matrix.unique_event_types = unique_event_types;
     design_matrix.num_event_types = num_event_types;
     design_matrix.window_length = window_length;
+    design_matrix.num_extra_predictors=num_extra_predictors;
 end
 
 % Remove artifacts from analysis
@@ -139,10 +160,13 @@ disp('running regression...');
 b = X\input_data;
 
 % Parse beta vector into segments
-glm_estimates = nan(max(window_length),num_event_types);
+glm_estimates = nan(max(window_length),num_event_types+min(size(extra_predictors)));
 for ii = 1:num_event_types
     glm_estimates(1:window_length(ii),ii) = b(sum(window_length(1:ii-1))+1:sum(window_length(1:ii)));
 %     b((ii-1)*window_length+1:ii*window_length);
+end
+for ii=1:min(size(extra_predictors)) 
+   glm_estimates(1,num_event_types+ii) = b(num_event_types*(window_length(1))+ii);
 end
 
 disp(['Done in ' num2str(toc(tictoc)) ' sec.']);
