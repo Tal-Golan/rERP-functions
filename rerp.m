@@ -13,14 +13,22 @@ function [ glm_estimates, design_matrix ] = rerp( input_data, varargin)
 % to indicate a different window length for each event type (order is
 % expected to correspond to ascending event type values). In the case of
 % variable window lengths, columns of the b matrix will be padded with NaNs
-% for analysis windows shorter than the maximum length. 
+% for analysis windows shorter than the maximum length. The last column
+% of b always hold the intercept beta value in its first row. 
 % b = RERP(data, latencies, types, len, art) where art is a vector of time
 % points which should be excluded from analysis (artifacts), will compute 
 % the regression after removing the corresponding data points from the data
 % and the design matrix. 
+% [b = RERP(...,P) allows P to include additional predictor variables which
+% are not "events" (e.g. the behavioral response latency for each trial). P
+% should be a vector or matrix where each column or row is a single
+% predictor vector with the same length as the input data. The
+% corresponding beta values will be returned each as the first row of a 
+% separate column in b, following the event-related columns and before the
+% intercept. 
 % [b, D] = RERP(...) will also return the struct D holding the resulting
 % design matrix and meta-data used in the regression analysis. 
-% b = RERP(data, D) where is the design matrix returned by a previous run
+% b = RERP(data, D) where D is the design matrix returned by a previous run
 % of the function, will apply the given design matrix to the new data. 
 % b = RERP(data, D, art) will also remove from analysis the data points 
 % indicated by the vector art. 
@@ -32,7 +40,7 @@ function [ glm_estimates, design_matrix ] = rerp( input_data, varargin)
 %    waveforms: II. Nonlinear effects, overlap correction, and practical 
 %    considerations. Psychophysiology, 52, pp.169–181.
 % 
-% Written by Tal Golan, Edden Gerber and Tamar Regev, Jan. 2016 
+% Written by Tal Golan, Edden Gerber, Tamar Regev and Tali Shrem, Jan. 2016 
 
 tictoc = tic;
 
@@ -40,13 +48,14 @@ tictoc = tic;
 nargin = length(varargin);
 
 % If additional predictors exist assign them to variable
-if nargin>1 && length(input_data)==length(varargin{nargin})
-    extra_predictors=varargin{nargin};
-    nargin=nargin-1; % ignore last input in counting input variables
+if nargin > 1 && length(input_data) == length(varargin{nargin}) % additional predictors are given as a last input argument with length equal to the data length
+    extra_predictors = varargin{nargin};
+    nargin = nargin - 1; % ignore last input in counting input variables
 else 
-    extra_predictors=[];
+    extra_predictors = [];
 end
 
+% Determine the identity of input arguments based on how many there are:
 if nargin < 1
     error('Not enough input arguments');
     
@@ -57,16 +66,19 @@ elseif nargin < 3 % 1 or 2 additional arguments
     event_types = design_matrix.event_types;
     window_length = design_matrix.window_length;
     artifact_indexes = [];
+    num_extra_predictors = design_matrix.num_extra_predictors;
     if nargin == 2 % artifact indexes included
         artifact_indexes = varargin{2};
     end
     
 elseif nargin < 5 % 3 or 4 additional arguments
     x_exists = false;
+    design_matrix = struct;
     event_latencies = varargin{1};
     event_types = varargin{2};
     window_length = varargin{3};
     artifact_indexes = []; 
+    num_extra_predictors = min(size(extra_predictors));
     if nargin == 4 % artifact indexes included
         artifact_indexes = varargin{4};
     end
@@ -88,10 +100,22 @@ event_type_indexes = zeros(size(event_types));
 for ii = 1:num_event_types 
     event_type_indexes(event_types == unique_event_types(ii)) = ii;
 end
-% Make sure all vectors are columns
+
+% Check that input arguments the expected size
+assert(isvector(input_data),'input_data input variable should be a vector.');
+assert(isstruct(design_matrix),'design_matrix input variable should be a structure.');
+assert(isvector(event_latencies),'event_latencies input variable should be a vector.');
+assert(isvector(event_types),'event_types input variable should be a vector.');
+assert(length(event_latencies)==length(event_types),'event_types and event_latencies should be the same length.');
+assert(isvector(window_length),'window_length input variable should be a scalar or vector.');
+assert(length(window_length)==num_event_types,'window_length should be a scalar or have the same number of elements as there are unique event types.');
+assert(isempty(artifact_indexes) || isvector(artifact_indexes),'artifact_indexes input variable should be a vector.');
+
+% Make sure all vectors are columns and matrices are arranged column-wise
 if isrow(event_latencies); event_latencies = event_latencies'; end
 if isrow(event_types); event_types = event_types'; end
 if isrow(window_length); window_length = window_length'; end
+if length(extra_predictors)~=size(extra_predictors,1); extra_predictors = extra_predictors'; end
 
 % Check if any event windows exceed data length. Warn and fix by eliminating them :
 events_exceeding = event_latencies + window_length(event_type_indexes) >= data_len;
@@ -125,30 +149,22 @@ else
         
         n = n + num_events*window_length(ii);
     end
+    
     % Build a sparse design matrix
     X = sparse(i,j,1,data_len,sum(window_length));
+    % Add extra predictors
+    X = cat(2,X,sparse(extra_predictors));
     % Add a constant predictor
     X = cat(2,X,sparse(ones(data_len,1)));
-    % Add extra predictors
-    if length(extra_predictors)==size(extra_predictors,1)
-        X=cat(2,X,sparse(extra_predictors));
-        num_extra_predictors=size(extra_predictors,2);
-    elseif length(extra_predictors)==size(extra_predictors,2)
-        X=cat(2,X,sparse(extra_predictors'));
-        num_extra_predictors=size(extra_predictors,1);
-    else
-        warning('Wrong dimensions of additional predictors matrix');
-    end
     
     % Assign design matrix struct
-    design_matrix = struct;
     design_matrix.matrix = X;
     design_matrix.event_latencies = event_latencies;
     design_matrix.event_types = event_types;
     design_matrix.unique_event_types = unique_event_types;
     design_matrix.num_event_types = num_event_types;
     design_matrix.window_length = window_length;
-    design_matrix.num_extra_predictors=num_extra_predictors;
+    design_matrix.num_extra_predictors = num_extra_predictors;
 end
 
 % Remove artifacts from analysis
@@ -159,15 +175,19 @@ input_data(artifact_indexes,:) = [];
 disp('running regression...');
 b = X\input_data;
 
+% Initialize glm_estimates matrix to hold one column for each event type,
+% extra predictor, and intercept
+glm_estimates = nan(max(window_length),num_event_types + num_extra_predictors + 1);
 % Parse beta vector into segments
-glm_estimates = nan(max(window_length),num_event_types+min(size(extra_predictors)));
 for ii = 1:num_event_types
     glm_estimates(1:window_length(ii),ii) = b(sum(window_length(1:ii-1))+1:sum(window_length(1:ii)));
-%     b((ii-1)*window_length+1:ii*window_length);
 end
-for ii=1:min(size(extra_predictors)) 
+% Parse beta values for additional predictors
+for ii=1:num_extra_predictors
    glm_estimates(1,num_event_types+ii) = b(num_event_types*(window_length(1))+ii);
 end
+% Parse intercept beta
+glm_estimates(1,end) = b(end);
 
 disp(['Done in ' num2str(toc(tictoc)) ' sec.']);
 
