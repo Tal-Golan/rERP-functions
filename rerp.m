@@ -1,13 +1,13 @@
-function [ glm_estimates, design_matrix ] = rerp( input_data, varargin)
+function [ glm_estimates, design_matrix] = rerp( input_data, varargin)
 %RERP performs a linear regression based analysis of event-related data.
 % 
 % Usage: 
 % b = RERP(data, latencies, types, len) where data is the observed time 
-% course, latencies is a vector holding the event onset latencies, types is
-% a vector of the same length where each value codes the type ("condition")
-% of the corresponding event, and len is the length of the window to be 
-% analyzed, returns the matrix b where each column is the beta coefficients 
-% associated with the timecourse of a specific event type. 
+% course (time x electrodes), latencies is a vector holding the event onset 
+% latencies, types is a vector of the same length where each value codes the
+% type ("condition") of the corresponding event, and len is the length of the
+% window to be analyzed, returns the matrix b where each column is the beta
+% coefficients  associated with the timecourse of a specific event type. 
 % len can either be a scalar for a fixed analysis window length, or a
 % vector with the same number of elements as there are unique event types
 % to indicate a different window length for each event type (order is
@@ -35,10 +35,10 @@ function [ glm_estimates, design_matrix ] = rerp( input_data, varargin)
 % 
 % For theoretical background, see: 
 % 1. Smith, N.J. & Kutas, M., 2014. Regression-based estimation of ERP 
-%    waveforms: I. The rERP framework. Psychophysiology, 52, pp.157–168.
+%    waveforms: I. The rERP framework. Psychophysiology, 52, pp.157â€“168.
 % 2. Smith, N.J. & Kutas, M., 2015. Regression-based estimation of ERP 
 %    waveforms: II. Nonlinear effects, overlap correction, and practical 
-%    considerations. Psychophysiology, 52, pp.169–181.
+%    considerations. Psychophysiology, 52, pp.169â€“181.
 % 
 % Written by Tal Golan, Edden Gerber, Tamar Regev and Tali Shrem, Jan. 2016 
 
@@ -47,8 +47,11 @@ tictoc = tic;
 % Handle input 
 nargin = length(varargin);
 
+data_len=size(input_data,1);
+nChannels=size(input_data,2);
+
 % If additional predictors exist assign them to variable
-if nargin > 1 && length(input_data) == length(varargin{nargin}) % additional predictors are given as a last input argument with length equal to the data length
+if nargin > 1 && data_len == length(varargin{nargin}) % additional predictors are given as a last input argument with length equal to the data length
     extra_predictors = varargin{nargin};
     nargin = nargin - 1; % ignore last input in counting input variables
 else 
@@ -88,7 +91,6 @@ else
 end
 
 % Initialize variables
-data_len = length(input_data);
 unique_event_types = unique(event_types);
 num_event_types = length(unique_event_types);
 % In case window_length is a scalar, duplicate it for all event types
@@ -102,7 +104,9 @@ for ii = 1:num_event_types
 end
 
 % Check that input arguments the expected size
-assert(isvector(input_data),'input_data input variable should be a vector.');
+if isvector(input_data) 
+    assert(iscolumn(input_data),'enter input_data as column vector (rows are timepoints)');
+end
 assert(isstruct(design_matrix),'design_matrix input variable should be a structure.');
 assert(isvector(event_latencies),'event_latencies input variable should be a vector.');
 assert(isvector(event_types),'event_types input variable should be a vector.');
@@ -172,24 +176,25 @@ X(artifact_indexes,:) = [];
 input_data(artifact_indexes,:) = [];
 
 % Ordinary least squares: solve observedTimecourse=X*b;
-disp('running regression...');
+fprintf('running regression...');
 b = X\input_data;
 
 % Initialize glm_estimates matrix to hold one column for each event type,
 % extra predictor, and intercept
-glm_estimates = nan(max(window_length),num_event_types + num_extra_predictors + 1);
+glm_estimates = nan(max(window_length),num_event_types + num_extra_predictors + 1,nChannels);
+
 % Parse beta vector into segments
-for ii = 1:num_event_types
-    glm_estimates(1:window_length(ii),ii) = b(sum(window_length(1:ii-1))+1:sum(window_length(1:ii)));
+curOffset=0;
+for ii = 1:num_event_types    
+    glm_estimates(1:window_length(ii),ii,:) = b(curOffset+(1:window_length(ii)),:);
+    curOffset=curOffset+window_length(ii);
 end
-% Parse beta values for additional predictors
-for ii=1:num_extra_predictors
-   glm_estimates(1,num_event_types+ii) = b(num_event_types*(window_length(1))+ii);
-end
+%Parse beta values for additional predictors
+glm_estimates(1,num_event_types+(1:num_extra_predictors),:) = b(curOffset+(1:num_extra_predictors),:);
+
 % Parse intercept beta
-glm_estimates(1,end) = b(end);
+glm_estimates(1,end,:) = b(end,:);
 
-disp(['Done in ' num2str(toc(tictoc)) ' sec.']);
+fprintf('Done in %g sec.\n',toc(tictoc))
 
 end
-
